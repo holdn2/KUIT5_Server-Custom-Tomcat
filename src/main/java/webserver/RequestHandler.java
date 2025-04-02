@@ -5,6 +5,7 @@ import enums.HttpHeader;
 import enums.HttpMethod;
 import enums.UrlPath;
 import enums.UserParam;
+import http.HttpRequest;
 import http.util.HttpRequestUtils;
 import http.util.IOUtils;
 import model.User;
@@ -30,19 +31,12 @@ public class RequestHandler implements Runnable{
         log.log(Level.INFO, "New Client Connect! Connected IP : " + connection.getInetAddress() + ", Port : " + connection.getPort());
         try (InputStream in = connection.getInputStream(); OutputStream out = connection.getOutputStream()){
             BufferedReader br = new BufferedReader(new InputStreamReader(in));
+            HttpRequest request = HttpRequest.from(br);
             DataOutputStream dos = new DataOutputStream(out);
 
-            String line = br.readLine();
-            System.out.println("요청 라인: " + line);
-
-            if (line == null || line.isEmpty()) return;
-
-            String[] tokens = line.split(" ");
-            if (tokens.length < 2) return;
-
             // 요구사항 1 index.html을 반환하도록 함.
-            String method = tokens[0];
-            String urlPath = tokens[1];
+            String method = request.getMethod();
+            String urlPath = request.getPath();
             // tokens[2]에는 프로토콜이 들어있다.
             if (urlPath.equals(UrlPath.DEFAULT.path())) {
                 urlPath = UrlPath.INDEX.path();
@@ -54,28 +48,25 @@ public class RequestHandler implements Runnable{
             int contentLength = 0;
             // 쿠키가 있을 때만 true로 바꾼다.
             boolean isLoggedIn = false;
-            String headerLine;
-            while (br.ready() && !(headerLine = br.readLine()).isEmpty()) {
-                // System.out.println(headerLine);
-                // 요구사항 3번의 사용할 body를 가져오기 위해 필요함.
-                if (headerLine.startsWith(HttpHeader.CONTENT_LENGTH.value())) {
-                    contentLength = Integer.parseInt(headerLine.split(":")[1].trim());
-                }
-                // 요구사항 6에서 헤더의 쿠키에 Cookie: logined=true 가 있을 경우 isLoggedIn을 true로 바꿔준다.
-                if (headerLine.startsWith(HttpHeader.COOKIE.value())) {
-                    String cookie = headerLine.substring("Cookie:".length()).trim();
-                    // 쿠키를 = 를 기준으로 나누어 저장한다. logined와 true가 나누어진다.
-                    String[] loginCookie = cookie.split("=", 2);
-                    if (loginCookie.length == 2 && loginCookie[0].trim().equals("logined")) {
-                        // logined 뒤에 true일 때만 isLoggedIn이 true가 된다.
-                        isLoggedIn = loginCookie[1].trim().equals("true");
-                    }
-                }
 
+            // Content-Length 읽기
+            String contentLengthHeader = request.getHeader(HttpHeader.CONTENT_LENGTH.value());
+            if (contentLengthHeader != null) {
+                contentLength = Integer.parseInt(contentLengthHeader.trim());
             }
 
+            // Cookie 파싱해서 로그인 여부 확인
+            String cookie = request.getHeader(HttpHeader.COOKIE.value());
+            if (cookie != null) {
+                String[] loginCookie = cookie.split("=", 2);
+                if (loginCookie.length == 2 && loginCookie[0].trim().equals("logined")) {
+                    isLoggedIn = loginCookie[1].trim().equals("true");
+                }
+            }
+
+
             // 요구사항 2번. GET 방식으로 회원가입하기. form.html에서 form태그의 method가 get일 때
-            if (method.equals(HttpMethod.GET.name()) && urlPath.startsWith(UrlPath.SIGNUP.path())) {
+            if (request.isMethod(HttpMethod.GET) && urlPath.startsWith(UrlPath.SIGNUP.path())) {
                 // split을 통해 ?를 기준으로 경로와 쿼리를 나눈다.
                 String[] pathSplit = urlPath.split("\\?", 2);
                 if (pathSplit.length > 1) {
@@ -97,9 +88,9 @@ public class RequestHandler implements Runnable{
             }
 
             // 요구사항 3번. form.html에서 form태그의 method가 post일 때
-            if(method.equals(HttpMethod.POST.name())&&urlPath.startsWith(UrlPath.SIGNUP.path())) {
+            if(request.isMethod(HttpMethod.POST)&&urlPath.startsWith(UrlPath.SIGNUP.path())) {
                 // IOUtils.readData를 통해 요청에서 body 부분만 가져온다.
-                String body = IOUtils.readData(br, contentLength);
+                String body = request.getBody();
                 System.out.println("바디 : " + body);
 
                 if (!body.isEmpty()) {
@@ -121,8 +112,8 @@ public class RequestHandler implements Runnable{
             }
 
             // 요구사항 5번. 로그인 하기
-            if (method.equals(HttpMethod.POST.name()) && urlPath.startsWith(UrlPath.LOGIN.path())) {
-                String body = IOUtils.readData(br, contentLength);
+            if (request.isMethod(HttpMethod.POST) && urlPath.startsWith(UrlPath.LOGIN.path())) {
+                String body = request.getBody();
                 Map<String, String> params = HttpRequestUtils.parseQueryParameter(body);
 
                 String userId = params.get(UserParam.USER_ID.key());
@@ -143,7 +134,7 @@ public class RequestHandler implements Runnable{
 
             // 요구사항 6
             // 사용자 목록 출력 (요구사항 6)
-            if (method.equals(HttpMethod.GET.name()) && urlPath.equals("/user/userList")) {
+            if (request.isMethod(HttpMethod.GET) && urlPath.equals("/user/userList")) {
                 // 쿠키에 logined=true가 없다면 login.html로 리다이렉트 시킨다.
                 if (!isLoggedIn) {
                     response302Header(dos, UrlPath.LOGIN_PAGE.path());
