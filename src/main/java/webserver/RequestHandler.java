@@ -6,6 +6,7 @@ import enums.HttpMethod;
 import enums.UrlPath;
 import enums.UserParam;
 import http.HttpRequest;
+import http.HttpResponse;
 import http.util.HttpRequestUtils;
 import http.util.IOUtils;
 import model.User;
@@ -31,39 +32,17 @@ public class RequestHandler implements Runnable{
         log.log(Level.INFO, "New Client Connect! Connected IP : " + connection.getInetAddress() + ", Port : " + connection.getPort());
         try (InputStream in = connection.getInputStream(); OutputStream out = connection.getOutputStream()){
             BufferedReader br = new BufferedReader(new InputStreamReader(in));
+
             HttpRequest request = HttpRequest.from(br);
-            DataOutputStream dos = new DataOutputStream(out);
+            HttpResponse response = new HttpResponse(out);
+
 
             // 요구사항 1 index.html을 반환하도록 함.
-            String method = request.getMethod();
             String urlPath = request.getPath();
             // tokens[2]에는 프로토콜이 들어있다.
             if (urlPath.equals(UrlPath.DEFAULT.path())) {
                 urlPath = UrlPath.INDEX.path();
             }
-
-            // 헤더 파싱!
-            // body의 내용에 대한 length 가져오기. Content-Length 값.
-            // 로그인되어있는지 쿠키 유무를 통해 확인한다.
-            int contentLength = 0;
-            // 쿠키가 있을 때만 true로 바꾼다.
-            boolean isLoggedIn = false;
-
-            // Content-Length 읽기
-            String contentLengthHeader = request.getHeader(HttpHeader.CONTENT_LENGTH.value());
-            if (contentLengthHeader != null) {
-                contentLength = Integer.parseInt(contentLengthHeader.trim());
-            }
-
-            // Cookie 파싱해서 로그인 여부 확인
-            String cookie = request.getHeader(HttpHeader.COOKIE.value());
-            if (cookie != null) {
-                String[] loginCookie = cookie.split("=", 2);
-                if (loginCookie.length == 2 && loginCookie[0].trim().equals("logined")) {
-                    isLoggedIn = loginCookie[1].trim().equals("true");
-                }
-            }
-
 
             // 요구사항 2번. GET 방식으로 회원가입하기. form.html에서 form태그의 method가 get일 때
             if (request.isMethod(HttpMethod.GET) && urlPath.startsWith(UrlPath.SIGNUP.path())) {
@@ -83,7 +62,7 @@ public class RequestHandler implements Runnable{
                     );
                     MemoryUserRepository.getInstance().addUser(user);
                 }
-                response302Header(dos, UrlPath.INDEX.path());
+                response.redirect(UrlPath.INDEX.path());
                 return;
             }
 
@@ -94,20 +73,19 @@ public class RequestHandler implements Runnable{
                 System.out.println("바디 : " + body);
 
                 if (!body.isEmpty()) {
-                    String queryString = body;
                     // parseQueryParameter를 통해 &를 기준으로 파라미터를 구분하고
                     // =를 기준으로 key와 value를 구분하여 Map에 저장한다.
-                    Map<String, String> params = HttpRequestUtils.parseQueryParameter(queryString);
+                    Map<String, String> params = HttpRequestUtils.parseQueryParameter(body);
                     User user = new User(
                             params.get(UserParam.USER_ID.key()),
                             params.get(UserParam.PASSWORD.key()),
                             params.get(UserParam.NAME.key()),
                             params.get(UserParam.EMAIL.key())
                     );
-                    System.out.println("생성된 유정 정보 : "+user);
+                    // System.out.println("생성된 유정 정보 : "+user);
                     MemoryUserRepository.getInstance().addUser(user);
                 }
-                response302Header(dos, UrlPath.INDEX.path());
+                response.redirect(UrlPath.INDEX.path());
                 return;
             }
 
@@ -124,10 +102,10 @@ public class RequestHandler implements Runnable{
 
                 // 해당 id의 User가 존재하고 입력 비밀번호가 해당 User의 비밀번호와 일치하면 쿠키를 추가하고 redirect한다.
                 if (user != null && user.getPassword().equals(password)) {
-                    response302HeaderWithCookie(dos, UrlPath.INDEX.path(), "logined=true");
+                    response.redirectWithCookie(UrlPath.INDEX.path(), "logined=true");
                 } else {
                     // 조건에 맞지 않으면 login_failed.html로 리다이렉트 시킨다.
-                    response302Header(dos, UrlPath.LOGIN_FAILED.path());
+                    response.redirect(UrlPath.LOGIN_FAILED.path());
                 }
                 return;
             }
@@ -135,92 +113,17 @@ public class RequestHandler implements Runnable{
             // 요구사항 6
             // 사용자 목록 출력 (요구사항 6)
             if (request.isMethod(HttpMethod.GET) && urlPath.equals("/user/userList")) {
-                // 쿠키에 logined=true가 없다면 login.html로 리다이렉트 시킨다.
-                if (!isLoggedIn) {
-                    response302Header(dos, UrlPath.LOGIN_PAGE.path());
+                if (!request.isLogined()) {
+                    response.redirect(UrlPath.LOGIN_PAGE.path());
                     return;
                 }
-                // 정적 파일 list.html 반환
-                File file = new File("webapp" + UrlPath.USER_LIST.path());
-                if (file.exists() && file.isFile()) {
-                    byte[] body = Files.readAllBytes(file.toPath());
-                    response200Header(dos, body.length, urlPath);
-                    responseBody(dos, body);
-                } else {
-                    byte[] body = "404 Not Found".getBytes();
-                    responseBody(dos, body);
-                }
+                response.forward(UrlPath.USER_LIST.path());
                 return;
             }
 
-            // 특정 경로에 대한 요청에 별도 처리가 없을 때 실행된다.
-            // 위 요청들에 해당되지 않으면 실행된다.
-            File file = new File("webapp" + urlPath);
-            System.out.println("요청한 파일 경로: " + file.getAbsolutePath());
-
-            if (file.exists() && file.isFile()) {
-                byte[] body = Files.readAllBytes(file.toPath());
-                response200Header(dos, body.length,urlPath);
-                responseBody(dos, body);
-            } else {
-                byte[] body = "404 Not Found".getBytes();
-                responseBody(dos, body);
-            }
+            response.forward(urlPath);
         } catch (IOException e) {
             log.log(Level.SEVERE,e.getMessage());
         }
     }
-
-    // 200 : 요청이 성공적으로 처리됐을 때
-    private void response200Header(DataOutputStream dos, int lengthOfBodyContent, String urlPath) {
-        try {
-            dos.writeBytes("HTTP/1.1 200 OK \r\n");
-            String contentType = getContentType(urlPath);
-            dos.writeBytes("Content-Type: "+contentType+";charset=utf-8\r\n");
-            dos.writeBytes("Content-Length: " + lengthOfBodyContent + "\r\n");
-            dos.writeBytes("\r\n");
-        } catch (IOException e) {
-            log.log(Level.SEVERE, e.getMessage());
-        }
-    }
-
-    private String getContentType(String urlPath) {
-        if(urlPath.endsWith(".css")) return "text/css";
-        return "text/html";
-    }
-
-    // 302 : 요청을 처리하고 클라이언트를 다른 url로 이동시키고 싶을 때 사용한다.
-    // 브라우저는 Location: 을 보고 해당 url로 자동 이동시킨다.
-    private void response302Header(DataOutputStream dos, String path) {
-        try {
-            dos.writeBytes("HTTP/1.1 302 Found\r\n");
-            dos.writeBytes("Location: " + path + "\r\n");
-            dos.writeBytes("\r\n");
-        } catch (IOException e) {
-            log.log(Level.SEVERE, e.getMessage());
-        }
-    }
-    // 로그인 시 쿠키를 헤더에 추가하여 index.html로 리다이렉트시킨다.
-    private void response302HeaderWithCookie(DataOutputStream dos, String path, String cookie) {
-        try {
-            dos.writeBytes("HTTP/1.1 302 Found\r\n");
-            dos.writeBytes("Location: " + path + "\r\n");
-            dos.writeBytes("Set-Cookie: " + cookie + "\r\n");
-            dos.writeBytes("\r\n");
-        } catch (IOException e) {
-            log.log(Level.SEVERE, e.getMessage());
-        }
-    }
-
-
-    private void responseBody(DataOutputStream dos, byte[] body) {
-        try {
-            dos.write(body, 0, body.length);
-            dos.flush();
-        } catch (IOException e) {
-            log.log(Level.SEVERE, e.getMessage());
-        }
-    }
-
-    // 404 추가하기.
 }

@@ -37,7 +37,7 @@ public class HttpRequest {
             }
         }
 
-        // Body 처리
+        // Body 처리. Content-Length 활용
         String contentLengthHeader = request.headers.get(HttpHeader.CONTENT_LENGTH.value());
         if (contentLengthHeader != null) {
             int contentLength = Integer.parseInt(contentLengthHeader.trim());
@@ -65,6 +65,17 @@ public class HttpRequest {
 
     public String getBody() {
         return body;
+    }
+
+    // 쿠키 처리 메서드. 로그인이 되어있는지 확인.
+    public boolean isLogined() {
+        String cookie = getHeader(HttpHeader.COOKIE.value());
+        if (cookie != null) {
+            String[] loginCookie = cookie.split("=", 2);
+            return loginCookie.length == 2 && loginCookie[0].trim().equals("logined")
+                    && loginCookie[1].trim().equals("true");
+        }
+        return false;
     }
 
     // 메서드 확인을 위한 편의 함수
